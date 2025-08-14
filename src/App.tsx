@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
-import { Mic, Camera, Settings, Home, MessageCircle, Volume2, VolumeX, Clock } from 'lucide-react';
+import { Mic, Camera, Settings, Home, MessageCircle, Volume2, VolumeX, MicOff } from 'lucide-react';
 
-// Replace with your actual API key
-const GEMINI_API_KEY = "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78";
+// Replace with your actual Gemini API key
+const GEMINI_API_KEY = "YOUR_GEMINI_API_KEY_HERE";
 
 type Page = 'home' | 'chat' | 'settings' | 'camera';
 type CameraMode = 'user' | 'environment';
@@ -11,33 +11,56 @@ function App() {
   const [isListening, setIsListening] = useState(false);
   const [isCameraActive, setIsCameraActive] = useState(false);
   const [currentPage, setCurrentPage] = useState<Page>('home');
-  const [audioLevel, setAudioLevel] = useState(0);
   const [assistantResponse, setAssistantResponse] = useState('');
   const [cameraMode, setCameraMode] = useState<CameraMode>('environment');
   const [mediaStream, setMediaStream] = useState<MediaStream | null>(null);
   const [isProcessing, setIsProcessing] = useState(false);
-  const [currentImage, setCurrentImage] = useState<string | null>(null);
+  const [capturedImage, setCapturedImage] = useState<string | null>(null);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [speechEnabled, setSpeechEnabled] = useState(true);
-  const [listeningTimer, setListeningTimer] = useState(0);
-  const [isInListeningSession, setIsInListeningSession] = useState(false);
-  const [sessionQuestions, setSessionQuestions] = useState<string[]>([]);
-  const [currentQuestionIndex, setCurrentQuestionIndex] = useState(0);
+  const [currentQuestion, setCurrentQuestion] = useState('');
+  const [isRecording, setIsRecording] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const recognitionRef = useRef<any>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const listeningIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const sessionTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Convert image to base64
-  const imageToBase64 = (canvas: HTMLCanvasElement): string => {
-    return canvas.toDataURL('image/jpeg', 0.8).split(',')[1];
+  // Test speech recognition support
+  const hasSpeechRecognition = !!(window.SpeechRecognition || (window as any).webkitSpeechRecognition);
+
+  // Convert canvas to base64
+  const canvasToBase64 = (canvas: HTMLCanvasElement): string => {
+    return canvas.toDataURL('image/jpeg', 0.9).split(',')[1];
   };
 
-  // Real Gemini Vision API call
+  // Capture single image from camera
+  const captureImage = (): string | null => {
+    if (videoRef.current && canvasRef.current && videoRef.current.readyState >= 2) {
+      const video = videoRef.current;
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+
+      if (context && video.videoWidth > 0 && video.videoHeight > 0) {
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        context.drawImage(video, 0, 0, canvas.width, canvas.height);
+        const imageDataUrl = canvas.toDataURL('image/jpeg', 0.9);
+        console.log('Image captured successfully');
+        return imageDataUrl;
+      }
+    }
+    console.log('Failed to capture image');
+    return null;
+  };
+
+  // Analyze image with Gemini Vision API
   const analyzeImageWithGemini = async (imageBase64: string, question: string): Promise<string> => {
+    if (GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+      return getFallbackResponse(question);
+    }
+
     try {
+      console.log('Sending request to Gemini API...');
       const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`, {
         method: 'POST',
         headers: {
@@ -47,7 +70,18 @@ function App() {
           contents: [{
             parts: [
               {
-                text: `You are a visual assistant helping visually impaired users. Analyze this image and answer the question: "${question}". Be descriptive, helpful, and specific. Focus on details that would be most useful for someone who cannot see the image.`
+                text: `You are a visual assistant helping visually impaired users. Analyze this image and answer the question: "${question}". 
+
+Be descriptive, helpful, and specific. Focus on details that would be most useful for someone who cannot see the image. If the question asks about:
+- "What do you see" or "describe": Give a comprehensive description of the scene, objects, people, colors, and layout
+- Text reading: Read any visible text accurately
+- Colors: Describe colors and their locations in detail
+- People: Describe people, their clothing, activities, and positions
+- Objects: Identify and count objects, describe their characteristics
+- Safety: Assess potential hazards or safety concerns
+- Navigation: Describe the environment for mobility purposes
+
+Keep your response clear, organized, and under 200 words.`
               },
               {
                 inline_data: {
@@ -58,72 +92,74 @@ function App() {
             ]
           }],
           generationConfig: {
-            temperature: 0.4,
-            topK: 32,
-            topP: 1,
+            temperature: 0.3,
+            topK: 40,
+            topP: 0.9,
             maxOutputTokens: 1024,
           }
         })
       });
 
       if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`Gemini API Error ${response.status}:`, errorText);
         throw new Error(`API request failed: ${response.status}`);
       }
 
       const data = await response.json();
+      console.log('Gemini API Response:', data);
       
       if (data.candidates && data.candidates[0] && data.candidates[0].content && data.candidates[0].content.parts[0]) {
         return data.candidates[0].content.parts[0].text;
       } else {
+        console.error('Unexpected API response format:', data);
         throw new Error('Unexpected API response format');
       }
     } catch (error) {
       console.error('Gemini API Error:', error);
-      
-      // Fallback to mock response if API fails
       return getFallbackResponse(question);
     }
   };
 
-  // Fallback responses when API is not available
+  // Fallback responses for demo/testing
   const getFallbackResponse = (question: string): string => {
     const lowerQuestion = question.toLowerCase();
     
-    if (lowerQuestion.includes('what') && (lowerQuestion.includes('see') || lowerQuestion.includes('this'))) {
-      return "I can see the current camera view. To get real-time scene analysis, please configure your Gemini API key in the code. I would describe objects, people, text, colors, and the overall scene in detail.";
+    if (lowerQuestion.includes('what') && (lowerQuestion.includes('see') || lowerQuestion.includes('look'))) {
+      return "I can see the camera view that was just captured. This is a demo response - to get real scene analysis, please add your Gemini API key. I would normally describe all objects, people, colors, and details in the image to help you understand what's in front of the camera.";
     } else if (lowerQuestion.includes('read') || lowerQuestion.includes('text')) {
-      return "I would read any visible text in the image, including signs, labels, documents, or written content. Please add your Gemini API key for real text recognition.";
+      return "I would read any text visible in the captured image, including signs, labels, documents, or written content. Please configure your Gemini API key for real text recognition from the camera image.";
     } else if (lowerQuestion.includes('color')) {
-      return "I would describe all the colors visible in the scene in detail. With the API configured, I can identify specific colors and their locations.";
+      return "I would describe all the colors visible in the captured scene in detail. With the API configured, I can identify specific colors, their shades, and their locations in the image.";
     } else if (lowerQuestion.includes('person') || lowerQuestion.includes('people')) {
-      return "I would describe any people in the image, their appearance, clothing, and activities. Please configure the API for real person detection.";
-    } else if (lowerQuestion.includes('safe') || lowerQuestion.includes('danger')) {
-      return "I would analyze the scene for potential hazards and safety concerns, then provide guidance. Real safety analysis requires the API to be configured.";
+      return "I would describe any people in the captured image, including their appearance, clothing, activities, and positions. Real person detection requires the API to be configured.";
+    } else if (lowerQuestion.includes('safe') || lowerQuestion.includes('danger') || lowerQuestion.includes('hazard')) {
+      return "I would analyze the captured scene for potential safety concerns, hazards, or obstacles, then provide guidance for safe navigation. This requires API configuration for real analysis.";
     } else if (lowerQuestion.includes('count') || lowerQuestion.includes('how many')) {
-      return "I would count the objects you're asking about. With the API configured, I can provide accurate counts of items in the scene.";
+      return "I would count the specific objects you're asking about in the captured image. With the API configured, I can provide accurate counts and descriptions.";
     } else {
-      return `I heard your question: "${question}". To provide real visual analysis, please add your Gemini API key to the code. I would analyze the camera image and give you detailed information about what I see.`;
+      return `I heard your question: "${question}". This is a demo response. To get real visual analysis of the captured camera image, please add your Gemini API key to the code. I would analyze the image and provide detailed information based on your question.`;
     }
   };
 
-  // Speech synthesis with better voice settings
+  // Speech synthesis
   const speak = (text: string) => {
     if (!speechEnabled || !('speechSynthesis' in window)) return;
 
     window.speechSynthesis.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     
-    // Better voice settings for accessibility
-    utterance.rate = 0.9;
+    utterance.rate = 0.85;
     utterance.pitch = 1.0;
     utterance.volume = 1.0;
     
-    // Try to use a clearer voice if available
+    // Use better voice if available
     const voices = window.speechSynthesis.getVoices();
     const preferredVoice = voices.find(voice => 
       voice.lang.startsWith('en') && 
-      (voice.name.includes('Google') || voice.name.includes('Microsoft') || voice.localService)
-    );
+      (voice.name.includes('Google') || voice.name.includes('Microsoft'))
+    ) || voices.find(voice => voice.lang.startsWith('en'));
+    
     if (preferredVoice) {
       utterance.voice = preferredVoice;
     }
@@ -140,295 +176,176 @@ function App() {
     setIsSpeaking(false);
   };
 
-  // Audio wave animation
+  // Initialize Speech Recognition
   useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (isListening || isInListeningSession) {
-      interval = setInterval(() => {
-        setAudioLevel(Math.random() * 100);
-      }, 100);
-    } else {
-      setAudioLevel(0);
+    if (!hasSpeechRecognition) {
+      console.log('Speech Recognition not supported');
+      return;
     }
-    return () => clearInterval(interval);
-  }, [isListening, isInListeningSession]);
 
-  // Initialize Speech Recognition with better error handling
-  useEffect(() => {
     const SpeechRecognition = window.SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (SpeechRecognition) {
-      recognitionRef.current = new SpeechRecognition();
-      recognitionRef.current.continuous = true;
-      recognitionRef.current.interimResults = false;
-      recognitionRef.current.lang = 'en-US';
-      recognitionRef.current.maxAlternatives = 1;
+    recognitionRef.current = new SpeechRecognition();
+    recognitionRef.current.continuous = false;
+    recognitionRef.current.interimResults = false;
+    recognitionRef.current.lang = 'en-US';
+    recognitionRef.current.maxAlternatives = 1;
 
-      recognitionRef.current.onstart = () => {
-        setIsListening(true);
-        console.log('Speech recognition started');
-      };
+    recognitionRef.current.onstart = () => {
+      console.log('Speech recognition started');
+      setIsListening(true);
+      setIsRecording(true);
+    };
 
-      recognitionRef.current.onresult = (event: any) => {
-        const lastResult = event.results[event.results.length - 1];
-        if (lastResult.isFinal) {
-          const transcript = lastResult[0].transcript.trim();
-          console.log('Recognized speech:', transcript);
-          
-          if (transcript && transcript.length > 2) {
-            addQuestionToSession(transcript);
-          }
-        }
-      };
+    recognitionRef.current.onresult = (event: any) => {
+      const result = event.results[0][0];
+      const transcript = result.transcript.trim();
+      const confidence = result.confidence;
+      
+      console.log('Speech recognized:', transcript, 'Confidence:', confidence);
+      setCurrentQuestion(transcript);
+      
+      if (transcript && transcript.length > 1) {
+        speak(`I heard: ${transcript}. Let me analyze the image and answer your question.`);
+        setTimeout(() => processQuestion(transcript), 2000);
+      } else {
+        speak('I didn\'t catch that clearly. Please try asking your question again.');
+        setIsProcessing(false);
+      }
+    };
 
-      recognitionRef.current.onend = () => {
-        setIsListening(false);
-        console.log('Speech recognition ended');
-        
-        // Auto-restart during listening session
-        if (isInListeningSession && listeningTimer > 0) {
-          setTimeout(() => {
-            if (isInListeningSession && recognitionRef.current) {
-              try {
-                recognitionRef.current.start();
-              } catch (error) {
-                console.log('Error restarting recognition:', error);
-              }
-            }
-          }, 100);
-        }
-      };
+    recognitionRef.current.onend = () => {
+      console.log('Speech recognition ended');
+      setIsListening(false);
+      setIsRecording(false);
+    };
 
-      recognitionRef.current.onerror = (event: any) => {
-        console.error('Speech recognition error:', event.error);
-        setIsListening(false);
-        
-        // Handle specific errors
-        if (event.error === 'not-allowed') {
-          speak('Microphone access denied. Please enable microphone permissions and try again.');
-          return;
-        }
-        
-        // Retry on recoverable errors during session
-        if (isInListeningSession && event.error !== 'aborted' && listeningTimer > 0) {
-          setTimeout(() => {
-            if (isInListeningSession && recognitionRef.current) {
-              try {
-                recognitionRef.current.start();
-              } catch (error) {
-                console.log('Error restarting after error:', error);
-              }
-            }
-          }, 1000);
-        }
-      };
-    } else {
-      console.error('Speech Recognition not supported');
-      speak('Speech recognition is not supported in this browser. Please use Chrome or Edge for the best experience.');
-    }
+    recognitionRef.current.onerror = (event: any) => {
+      console.error('Speech recognition error:', event.error);
+      setIsListening(false);
+      setIsRecording(false);
+      
+      let errorMessage = 'Sorry, there was an issue with voice recognition. ';
+      
+      switch (event.error) {
+        case 'not-allowed':
+          errorMessage += 'Microphone access was denied. Please allow microphone permissions and try again.';
+          break;
+        case 'no-speech':
+          errorMessage += 'No speech was detected. Please try speaking louder and clearer.';
+          break;
+        case 'audio-capture':
+          errorMessage += 'No microphone was found. Please check your microphone connection.';
+          break;
+        case 'network':
+          errorMessage += 'Network error occurred. Please check your internet connection.';
+          break;
+        default:
+          errorMessage += 'Please try again.';
+      }
+      
+      speak(errorMessage);
+      setIsProcessing(false);
+    };
 
     return () => {
       if (recognitionRef.current) {
         recognitionRef.current.stop();
       }
     };
-  }, [isInListeningSession, listeningTimer]);
+  }, []);
 
-  // Auto-capture images when camera is active
-  useEffect(() => {
-    let interval: ReturnType<typeof setInterval>;
-    if (isCameraActive && videoRef.current) {
-      // Initial capture after camera starts
-      setTimeout(() => captureCurrentFrame(), 1000);
-      // Regular captures every 3 seconds for real-time analysis
-      interval = setInterval(() => {
-        captureCurrentFrame();
-      }, 3000);
+  // Process the question with captured image
+  const processQuestion = async (question: string) => {
+    if (!isCameraActive) {
+      speak('Please turn on the camera first, then ask your question.');
+      setIsProcessing(false);
+      return;
     }
-    return () => clearInterval(interval);
-  }, [isCameraActive]);
 
-  // Page announcements
-  useEffect(() => {
-    const announcements = {
-      home: 'Welcome to AKSHI Global AI Assistant. Turn on the camera, then press the microphone button to start a 20-second question session.',
-      chat: 'Features page showing available visual assistance capabilities.',
-      settings: 'Settings page for audio and camera preferences.',
-      camera: 'Live camera view is active. I can see what you are looking at. Press the microphone to start asking questions about the scene.',
-    };
+    // Capture image at the moment of asking
+    const imageDataUrl = captureImage();
+    if (!imageDataUrl) {
+      speak('Unable to capture image from camera. Please make sure the camera is working and try again.');
+      setIsProcessing(false);
+      return;
+    }
+
+    setCapturedImage(imageDataUrl);
     
-    if (speechEnabled) {
-      setTimeout(() => speak(announcements[currentPage]), 800);
-    }
-  }, [currentPage, speechEnabled]);
-
-  const captureCurrentFrame = () => {
-    if (videoRef.current && canvasRef.current && videoRef.current.readyState >= 2) {
-      const video = videoRef.current;
-      const canvas = canvasRef.current;
-      const context = canvas.getContext('2d');
-
-      if (context && video.videoWidth > 0 && video.videoHeight > 0) {
-        canvas.width = video.videoWidth;
-        canvas.height = video.videoHeight;
-        context.drawImage(video, 0, 0, canvas.width, canvas.height);
-        const imageDataUrl = canvas.toDataURL('image/jpeg', 0.8);
-        setCurrentImage(imageDataUrl);
-        console.log('Frame captured for analysis');
-      }
+    try {
+      console.log('Processing question with captured image');
+      const imageBase64 = canvasToBase64(canvasRef.current!);
+      const response = await analyzeImageWithGemini(imageBase64, question);
+      
+      console.log('AI Response:', response);
+      setAssistantResponse(response);
+      speak(response);
+    } catch (error) {
+      console.error('Error processing question:', error);
+      const errorMessage = 'Sorry, I had trouble analyzing the image. Please try again.';
+      setAssistantResponse(errorMessage);
+      speak(errorMessage);
+    } finally {
+      setIsProcessing(false);
     }
   };
 
-  const addQuestionToSession = (question: string) => {
-    console.log('Adding question to session:', question);
-    setSessionQuestions(prev => [...prev, question]);
-    speak(`Question received: ${question}`);
-  };
+  // Start listening for question
+  const startListening = () => {
+    if (!hasSpeechRecognition) {
+      speak('Speech recognition is not supported in this browser. Please try using Chrome or Edge.');
+      return;
+    }
 
-  const startListeningSession = () => {
-    if (isInListeningSession || !recognitionRef.current) return;
+    if (!isCameraActive) {
+      speak('Please turn on the camera first.');
+      return;
+    }
 
-    console.log('Starting 20-second listening session');
-    setIsInListeningSession(true);
-    setSessionQuestions([]);
-    setListeningTimer(20);
-    setCurrentQuestionIndex(0);
+    if (isListening || isProcessing) return;
+
+    setIsProcessing(true);
+    setCurrentQuestion('');
+    setAssistantResponse('');
     
-    speak("I'm listening for 20 seconds. Ask me any questions about what you see.");
+    speak('I\'m ready to listen. Please ask your question about what the camera sees.');
     
-    // Start the countdown timer
-    listeningIntervalRef.current = setInterval(() => {
-      setListeningTimer(prev => {
-        if (prev <= 1) {
-          endListeningSession();
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-
-    // Start speech recognition
     setTimeout(() => {
-      if (recognitionRef.current && isInListeningSession) {
+      if (recognitionRef.current) {
         try {
           recognitionRef.current.start();
         } catch (error) {
           console.error('Error starting recognition:', error);
           speak('Unable to start voice recognition. Please check your microphone permissions.');
+          setIsProcessing(false);
         }
       }
-    }, 2000); // Wait for announcement to finish
-
-    // Session timeout
-    sessionTimeoutRef.current = setTimeout(() => {
-      endListeningSession();
-    }, 20000);
+    }, 2500);
   };
 
-  const endListeningSession = () => {
-    console.log('Ending listening session');
-    setIsInListeningSession(false);
-    setIsListening(false);
-    setListeningTimer(0);
-    
-    // Clear timers
-    if (listeningIntervalRef.current) {
-      clearInterval(listeningIntervalRef.current);
-    }
-    if (sessionTimeoutRef.current) {
-      clearTimeout(sessionTimeoutRef.current);
-    }
-    
-    // Stop speech recognition
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-    }
-
-    if (sessionQuestions.length > 0) {
-      speak(`I heard ${sessionQuestions.length} question${sessionQuestions.length > 1 ? 's' : ''}. Let me analyze the scene and answer them now.`);
-      setTimeout(() => {
-        processSessionQuestions();
-      }, 3000);
-    } else {
-      speak("I didn't hear any questions during the session. Please try again and speak clearly.");
-    }
-  };
-
-  const processSessionQuestions = async () => {
-    if (!currentImage) {
-      speak('No camera image available. Please make sure the camera is active and try again.');
-      return;
-    }
-
-    console.log('Processing questions with current image');
-    setIsProcessing(true);
-    setCurrentQuestionIndex(0);
-
-    // Capture the latest frame for analysis
-    captureCurrentFrame();
-    
-    // Wait a moment for the capture to complete
-    await new Promise(resolve => setTimeout(resolve, 500));
-
-    for (let i = 0; i < sessionQuestions.length; i++) {
-      setCurrentQuestionIndex(i + 1);
-      const question = sessionQuestions[i];
-      
-      console.log(`Processing question ${i + 1}: ${question}`);
-      speak(`Question ${i + 1}: ${question}`);
-      await new Promise(resolve => setTimeout(resolve, 2000));
-      
-      try {
-        // Get base64 image data
-        if (canvasRef.current) {
-          const imageBase64 = imageToBase64(canvasRef.current);
-          
-          // Analyze with Gemini Vision API
-          const response = await analyzeImageWithGemini(imageBase64, question);
-          
-          console.log('AI Response:', response);
-          setAssistantResponse(response);
-          speak(response);
-        } else {
-          const fallbackResponse = getFallbackResponse(question);
-          setAssistantResponse(fallbackResponse);
-          speak(fallbackResponse);
-        }
-        
-        // Wait between questions
-        if (i < sessionQuestions.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 4000));
-        }
-      } catch (error) {
-        console.error('Error processing question:', error);
-        const errorMessage = `Sorry, I had trouble analyzing the image for this question. ${getFallbackResponse(question)}`;
-        setAssistantResponse(errorMessage);
-        speak(errorMessage);
-        
-        if (i < sessionQuestions.length - 1) {
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-      }
-    }
-    
-    setIsProcessing(false);
-    setCurrentQuestionIndex(0);
-    speak("All questions answered. You can start a new session by pressing the microphone button again.");
-  };
-
+  // Toggle camera with improved error handling
   const toggleCamera = async () => {
     if (isCameraActive) {
       console.log('Stopping camera');
-      mediaStream?.getTracks().forEach(track => track.stop());
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+      }
       setIsCameraActive(false);
       if (videoRef.current) {
         videoRef.current.srcObject = null;
       }
       setMediaStream(null);
-      setCurrentImage(null);
+      setCapturedImage(null);
       speak("Camera turned off.");
     } else {
       try {
-        console.log('Starting camera');
+        console.log('Starting camera with mode:', cameraMode);
+        
+        // Check if camera is available
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Camera not supported in this browser');
+        }
+
         const constraints = { 
           video: { 
             facingMode: cameraMode,
@@ -437,20 +354,95 @@ function App() {
           }, 
           audio: false 
         };
+
         const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        
         if (videoRef.current) {
           videoRef.current.srcObject = stream;
+          // Wait for video to load
+          videoRef.current.onloadedmetadata = () => {
+            if (videoRef.current) {
+              videoRef.current.play();
+            }
+          };
         }
+        
         setMediaStream(stream);
         setIsCameraActive(true);
         setCurrentPage('camera');
-        speak("Camera is now active. I can see what you're looking at. Press the microphone button to start asking questions about the scene.");
+        speak("Camera is now active. You can ask questions about what I can see.");
       } catch (error) {
         console.error('Error accessing camera:', error);
-        speak("Unable to access camera. Please check your permissions and try again.");
+        let errorMessage = 'Unable to access camera. ';
+        
+        if (error.name === 'NotAllowedError') {
+          errorMessage += 'Please allow camera permissions and try again.';
+        } else if (error.name === 'NotFoundError') {
+          errorMessage += 'No camera found on this device.';
+        } else if (error.name === 'NotReadableError') {
+          errorMessage += 'Camera is being used by another application.';
+        } else {
+          errorMessage += 'Please check your camera and try again.';
+        }
+        
+        speak(errorMessage);
       }
     }
   };
+
+  // Switch camera mode and restart if active
+  const switchCamera = async () => {
+    const newMode = cameraMode === 'user' ? 'environment' : 'user';
+    setCameraMode(newMode);
+    
+    if (isCameraActive) {
+      // Stop current camera
+      if (mediaStream) {
+        mediaStream.getTracks().forEach(track => track.stop());
+      }
+      
+      // Start with new mode
+      try {
+        const constraints = { 
+          video: { 
+            facingMode: newMode,
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          }, 
+          audio: false 
+        };
+
+        const stream = await navigator.mediaDevices.getUserMedia(constraints);
+        
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+        
+        setMediaStream(stream);
+        speak(`Switched to ${newMode === 'user' ? 'front' : 'back'} camera.`);
+      } catch (error) {
+        console.error('Error switching camera:', error);
+        speak('Unable to switch camera. Using current camera.');
+      }
+    } else {
+      speak(`Camera mode set to ${newMode === 'user' ? 'front' : 'back'} camera.`);
+    }
+  };
+
+  // Page announcements
+  useEffect(() => {
+    const announcements = {
+      home: 'Welcome to AKSHI Global AI Assistant. Turn on the camera, then click Ask Question to get voice-powered visual assistance.',
+      chat: 'Features page showing available visual assistance capabilities.',
+      settings: 'Settings page for audio and camera preferences.',
+      camera: 'Camera page. The camera is ready for visual analysis. Click Ask Question to speak your query.',
+    };
+    
+    if (speechEnabled) {
+      const timer = setTimeout(() => speak(announcements[currentPage]), 800);
+      return () => clearTimeout(timer);
+    }
+  }, [currentPage, speechEnabled]);
 
   // Load voices when available
   useEffect(() => {
@@ -460,7 +452,9 @@ function App() {
         console.log('Available voices:', voices.length);
       };
       
-      window.speechSynthesis.onvoiceschanged = loadVoices;
+      if (window.speechSynthesis.onvoiceschanged !== undefined) {
+        window.speechSynthesis.onvoiceschanged = loadVoices;
+      }
       loadVoices();
     }
   }, []);
@@ -486,13 +480,22 @@ function App() {
           <main className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 pb-32 sm:pb-24">
             <div className="text-center mb-8 sm:mb-12">
               <p className="text-gray-400 font-semibold text-sm sm:text-base mb-2">
-                {isInListeningSession 
-                  ? `Listening... ${listeningTimer} seconds remaining`
-                  : isProcessing 
-                  ? `Processing questions... ${currentQuestionIndex}/${sessionQuestions.length}`
+                {isProcessing 
+                  ? 'Processing your question...'
+                  : isListening 
+                  ? 'Listening to your question...'
                   : 'Voice Assistant for Visual Accessibility'
                 }
               </p>
+              
+              {currentQuestion && (
+                <div className="max-w-2xl mx-auto mt-4 mb-4">
+                  <p className="text-yellow-400 font-medium text-base">
+                    Question: "{currentQuestion}"
+                  </p>
+                </div>
+              )}
+              
               {assistantResponse && (
                 <div className="max-w-3xl mx-auto mt-4">
                   <p className="text-blue-400 font-medium text-base sm:text-lg">
@@ -514,29 +517,27 @@ function App() {
             {/* Audio Visualization */}
             <div className="relative mb-12 sm:mb-16">
               <div className="relative w-40 h-40 sm:w-48 sm:h-48 md:w-56 md:h-56">
-                <div className={`absolute inset-0 rounded-full border-2 border-blue-400/30 transition-all duration-100 ${(isListening || isInListeningSession || isProcessing) ? 'animate-pulse' : ''}`}>
+                <div className={`absolute inset-0 rounded-full border-2 border-blue-400/30 transition-all duration-300 ${(isListening || isProcessing) ? 'animate-pulse scale-110' : ''}`}>
                   <div className="absolute inset-2 rounded-full border border-blue-400/50"></div>
                   <div className="absolute inset-4 rounded-full border border-blue-400/70"></div>
                 </div>
                 
-                {isInListeningSession && (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="bg-blue-500/90 text-white px-6 py-3 rounded-full font-bold text-3xl">
-                      {listeningTimer}
-                    </div>
-                  </div>
-                )}
+                <div className="absolute inset-1/2 transform -translate-x-1/2 -translate-y-1/2 flex items-center justify-center">
+                  {isListening ? (
+                    <MicOff className="w-12 h-12 text-red-400 animate-pulse" />
+                  ) : isProcessing ? (
+                    <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400"></div>
+                  ) : (
+                    <Mic className="w-12 h-12 text-blue-400" />
+                  )}
+                </div>
                 
-                {!isInListeningSession && (
-                  <div className="absolute inset-1/2 transform -translate-x-1/2 -translate-y-1/2 w-8 h-8 bg-blue-400 rounded-full shadow-lg"></div>
-                )}
-                
-                {(isListening || isInListeningSession || isProcessing) && (
+                {isListening && (
                   <div className="absolute inset-0">
                     {[...Array(8)].map((_, i) => (
                       <div
                         key={i}
-                        className="absolute w-2 h-2 bg-blue-400 rounded-full animate-bounce"
+                        className="absolute w-3 h-3 bg-red-400 rounded-full animate-bounce"
                         style={{
                           top: `${50 + 35 * Math.sin((i * Math.PI) / 4)}%`,
                           left: `${50 + 35 * Math.cos((i * Math.PI) / 4)}%`,
@@ -549,36 +550,20 @@ function App() {
               </div>
             </div>
 
-            {/* Questions Queue */}
-            {sessionQuestions.length > 0 && (
-              <div className="mb-8 max-w-2xl mx-auto w-full">
-                <h3 className="text-lg font-semibold mb-4 text-center">Questions in Queue:</h3>
-                <div className="space-y-2">
-                  {sessionQuestions.map((question, index) => (
-                    <div 
-                      key={index} 
-                      className={`p-3 rounded-lg border text-sm ${
-                        index < currentQuestionIndex 
-                          ? 'bg-green-900/30 border-green-500/50 text-green-100' 
-                          : index === currentQuestionIndex - 1 && isProcessing
-                          ? 'bg-yellow-900/30 border-yellow-500/50 text-yellow-100'
-                          : 'bg-gray-800/50 border-gray-600/50'
-                      }`}
-                    >
-                      {index + 1}. {question}
-                      {index < currentQuestionIndex && ' ✓'}
-                      {index === currentQuestionIndex - 1 && isProcessing && ' ⟳'}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )}
-
             {/* API Configuration Notice */}
             {GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE" && (
               <div className="mb-8 max-w-2xl mx-auto bg-yellow-900/20 border border-yellow-600/50 rounded-xl p-4">
                 <p className="text-yellow-300 text-sm text-center">
-                  <strong>Note:</strong> Replace "YOUR_GEMINI_API_KEY_HERE" in the code with your actual Gemini API key for real scene analysis.
+                  <strong>Demo Mode:</strong> Add your Gemini API key for real scene analysis. Currently showing demo responses.
+                </p>
+              </div>
+            )}
+
+            {/* Browser Support Check */}
+            {!hasSpeechRecognition && (
+              <div className="mb-8 max-w-2xl mx-auto bg-red-900/20 border border-red-600/50 rounded-xl p-4">
+                <p className="text-red-300 text-sm text-center">
+                  <strong>Unsupported Browser:</strong> Speech recognition requires Chrome, Edge, or Safari. Text input alternative coming soon.
                 </p>
               </div>
             )}
@@ -586,37 +571,44 @@ function App() {
             {/* Main Controls */}
             <div className="text-center mb-8">
               <button
-                onClick={startListeningSession}
-                disabled={isProcessing || isInListeningSession || !isCameraActive}
+                onClick={startListening}
+                disabled={!hasSpeechRecognition || isProcessing || isListening || !isCameraActive}
                 className={`inline-flex items-center space-x-3 px-8 py-4 rounded-full font-medium text-lg transition-all duration-300 ${
                   !isCameraActive
                     ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
-                    : isInListeningSession
-                    ? 'bg-red-600 text-white shadow-lg'
+                    : !hasSpeechRecognition
+                    ? 'bg-red-600/50 text-red-300 cursor-not-allowed'
+                    : isListening
+                    ? 'bg-red-600 text-white shadow-lg animate-pulse'
                     : isProcessing
-                    ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                    ? 'bg-yellow-600 text-white shadow-lg'
                     : 'bg-blue-600 text-white hover:bg-blue-700 shadow-lg'
                 }`}
               >
-                {isInListeningSession ? (
+                {isListening ? (
                   <>
-                    <Clock size={24} />
-                    <span>Listening... {listeningTimer}s</span>
+                    <MicOff size={24} />
+                    <span>Listening...</span>
                   </>
                 ) : isProcessing ? (
                   <>
                     <div className="animate-spin rounded-full h-6 w-6 border-b-2 border-white"></div>
-                    <span>Analyzing Scene...</span>
+                    <span>Processing...</span>
                   </>
                 ) : !isCameraActive ? (
                   <>
                     <Camera size={24} />
                     <span>Turn on Camera First</span>
                   </>
+                ) : !hasSpeechRecognition ? (
+                  <>
+                    <MicOff size={24} />
+                    <span>Voice Not Supported</span>
+                  </>
                 ) : (
                   <>
                     <Mic size={24} />
-                    <span>Start Voice Session</span>
+                    <span>Ask Question</span>
                   </>
                 )}
               </button>
@@ -646,7 +638,7 @@ function App() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 max-w-md mx-auto">
               <button
                 onClick={toggleCamera}
-                disabled={isProcessing || isInListeningSession}
+                disabled={isProcessing || isListening}
                 className="flex items-center justify-center space-x-2 px-6 py-3 bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-xl font-medium transition-colors"
               >
                 <Camera size={20} />
@@ -654,13 +646,138 @@ function App() {
               </button>
               
               <button
-                onClick={() => speak("AKSHI Global AI Assistant helps you understand what you see. First, turn on the camera so I can see what you're looking at. Then press the microphone button to start a 20-second voice session. Ask me multiple questions about the scene, and I will analyze the camera image and answer all your questions with detailed descriptions.")}
-                disabled={isProcessing || isInListeningSession}
+                onClick={() => speak("AKSHI Global AI Assistant helps you understand what you see. First, turn on the camera. Then click 'Ask Question' and speak clearly. I will capture an image and analyze it to answer your question with detailed descriptions.")}
+                disabled={isProcessing || isListening}
                 className="flex items-center justify-center space-x-2 px-6 py-3 bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-xl font-medium transition-colors"
               >
                 <Volume2 size={20} />
                 <span>How to Use</span>
               </button>
+            </div>
+
+            {/* Camera Mode Switch */}
+            <div className="mt-8">
+              <button
+                onClick={switchCamera}
+                disabled={isProcessing || isListening}
+                className="flex items-center space-x-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-full text-sm font-medium transition-colors"
+              >
+                <span>Switch to {cameraMode === 'user' ? 'Back' : 'Front'} Camera</span>
+              </button>
+            </div>
+
+            {/* Current Response Display */}
+            {assistantResponse && (
+              <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-6 mb-8 max-w-3xl mt-8">
+                <h3 className="font-semibold text-lg text-blue-300 mb-3">AI Response:</h3>
+                <p className="text-gray-200 text-base leading-relaxed">{assistantResponse}</p>
+                {currentQuestion && (
+                  <p className="text-gray-400 text-sm mt-3 italic">Question: "{currentQuestion}"</p>
+                )}
+              </div>
+            )}
+
+            {/* Example Commands */}
+            <div className="text-center mt-8">
+              <p className="text-gray-400 text-sm mb-3">Example voice commands:</p>
+              <div className="flex flex-wrap justify-center gap-2">
+                {[
+                  "What do you see?",
+                  "Read any text",
+                  "Describe the scene",
+                  "Are there any people?",
+                  "What colors do you see?",
+                  "Count the objects",
+                  "Is this place safe?",
+                  "What's in front of me?"
+                ].map((command, index) => (
+                  <span key={index} className="bg-gray-800/50 px-3 py-1 rounded-full text-xs text-gray-300 border border-gray-700">
+                    "{command}"
+                  </span>
+                ))}
+              </div>
+            </div>
+          </main>
+        )}
+
+        {/* Chat Page - Features */}
+        {currentPage === 'chat' && (
+          <main className="flex-1 px-4 sm:px-6 lg:px-8 pb-32 sm:pb-24 pt-8">
+            <div className="max-w-4xl mx-auto">
+              <h1 className="font-bold text-2xl sm:text-3xl md:text-4xl text-center mb-8">
+                Visual Assistance Features
+              </h1>
+              
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
+                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
+                  <Mic className="w-8 h-8 mb-4 text-blue-400" />
+                  <h3 className="font-semibold text-lg mb-2">Voice Questions</h3>
+                  <p className="text-gray-400 text-sm">Ask questions using your voice - clear speech recognition with one question at a time.</p>
+                </div>
+                
+                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
+                  <Camera className="w-8 h-8 mb-4 text-blue-400" />
+                  <h3 className="font-semibold text-lg mb-2">Instant Image Capture</h3>
+                  <p className="text-gray-400 text-sm">Captures image exactly when you ask your question for accurate, contextual analysis.</p>
+                </div>
+                
+                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
+                  <Volume2 className="w-8 h-8 mb-4 text-blue-400" />
+                  <h3 className="font-semibold text-lg mb-2">Audio Responses</h3>
+                  <p className="text-gray-400 text-sm">Detailed spoken answers with clear, natural speech synthesis for complete accessibility.</p>
+                </div>
+              </div>
+
+              <div className="bg-blue-900/20 rounded-xl p-6 border border-blue-500/30 mb-8">
+                <h3 className="font-semibold text-lg text-blue-300 mb-4">How It Works</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-sm">
+                  <div>
+                    <h4 className="font-medium text-white mb-3">Simple Process:</h4>
+                    <ol className="space-y-2 text-gray-300 list-decimal list-inside">
+                      <li>Turn on camera</li>
+                      <li>Click "Ask Question"</li>
+                      <li>Speak your question clearly</li>
+                      <li>Image is captured automatically</li>
+                      <li>Get detailed audio answer</li>
+                    </ol>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-white mb-3">Question Types:</h4>
+                    <ul className="space-y-1 text-gray-300">
+                      <li>• Scene description</li>
+                      <li>• Text reading (OCR)</li>
+                      <li>• Object identification</li>
+                      <li>• People detection</li>
+                      <li>• Color analysis</li>
+                      <li>• Safety assessment</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
+
+              <div className="bg-green-900/20 rounded-xl p-6 border border-green-500/30">
+                <h3 className="font-semibold text-lg text-green-300 mb-4">Best Practices</h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
+                  <div>
+                    <h4 className="font-medium text-white mb-3">For Clear Recognition:</h4>
+                    <ul className="space-y-1 text-gray-300">
+                      <li>• Speak clearly and at normal speed</li>
+                      <li>• Reduce background noise</li>
+                      <li>• Use Chrome or Edge browser</li>
+                      <li>• Allow microphone permissions</li>
+                    </ul>
+                  </div>
+                  <div>
+                    <h4 className="font-medium text-white mb-3">For Best Analysis:</h4>
+                    <ul className="space-y-1 text-gray-300">
+                      <li>• Ensure good lighting</li>
+                      <li>• Hold camera steady</li>
+                      <li>• Point at what you want analyzed</li>
+                      <li>• Ask specific questions</li>
+                    </ul>
+                  </div>
+                </div>
+              </div>
             </div>
           </main>
         )}
@@ -670,14 +787,16 @@ function App() {
           <main className="flex-1 flex flex-col items-center justify-center px-4 sm:px-6 lg:px-8 pb-32 sm:pb-24 pt-8">
             <div className="max-w-4xl w-full mx-auto">
               <h1 className="font-bold text-2xl sm:text-3xl md:text-4xl text-center mb-4">
-                Live Camera Vision Assistant
+                Camera Vision Assistant
               </h1>
               <p className="text-gray-400 text-center mb-8">
-                {isInListeningSession 
-                  ? `Listening for questions... ${listeningTimer} seconds remaining`
-                  : isProcessing 
-                  ? `Analyzing scene and answering question ${currentQuestionIndex} of ${sessionQuestions.length}`
-                  : "Camera is active - I can see what you're looking at"
+                {isProcessing 
+                  ? 'Analyzing captured image...'
+                  : isListening 
+                  ? 'Listening to your question...'
+                  : isCameraActive
+                  ? "Camera is ready - click Ask Question to get visual assistance"
+                  : "Turn on camera to begin visual analysis"
                 }
               </p>
               
@@ -685,26 +804,29 @@ function App() {
                 <video ref={videoRef} autoPlay playsInline muted className="w-full h-full object-cover" />
                 <canvas ref={canvasRef} className="hidden" />
                 
-                {isProcessing && (
-                  <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                {/* Show captured image overlay when processing */}
+                {capturedImage && isProcessing && (
+                  <div className="absolute inset-0 bg-black/70 flex items-center justify-center">
                     <div className="text-center">
-                      <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-400 mx-auto mb-4"></div>
-                      <p className="text-white font-medium">
-                        Analyzing scene for question {currentQuestionIndex} of {sessionQuestions.length}
-                      </p>
+                      <img src={capturedImage} alt="Captured" className="max-w-xs max-h-48 rounded-lg mb-4 border border-blue-400" />
+                      <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-400 mx-auto mb-2"></div>
+                      <p className="text-white font-medium">Analyzing this image...</p>
                     </div>
                   </div>
                 )}
                 
-                {isInListeningSession && (
-                  <div className="absolute top-4 right-4 bg-blue-500/90 text-white px-4 py-2 rounded-full text-lg font-bold animate-pulse">
-                    {listeningTimer}s
+                {isListening && (
+                  <div className="absolute top-4 right-4 bg-red-500/90 text-white px-4 py-2 rounded-full font-bold animate-pulse">
+                    🎤 Listening
                   </div>
                 )}
                 
                 {!isCameraActive && (
                   <div className="absolute inset-0 flex items-center justify-center">
-                    <span className="text-gray-400">Camera is off. Use the controls below to enable.</span>
+                    <div className="text-center">
+                      <Camera className="w-16 h-16 text-gray-500 mx-auto mb-4" />
+                      <span className="text-gray-400">Camera is off. Click Start Camera below.</span>
+                    </div>
                   </div>
                 )}
               </div>
@@ -720,44 +842,44 @@ function App() {
                   <span>{isCameraActive ? 'Stop Camera' : 'Start Camera'}</span>
                 </button>
                 
+                <button
+                  onClick={switchCamera}
+                  disabled={isProcessing || isListening}
+                  className="flex items-center space-x-2 px-4 py-2 bg-purple-600 hover:bg-purple-700 disabled:bg-gray-600 disabled:cursor-not-allowed rounded-full text-sm font-medium transition-colors"
+                >
+                  <span>Switch to {cameraMode === 'user' ? 'Back' : 'Front'} Camera</span>
+                </button>
+                
                 {isCameraActive && (
                   <button
-                    onClick={startListeningSession}
-                    disabled={isProcessing || isInListeningSession}
+                    onClick={startListening}
+                    disabled={!hasSpeechRecognition || isProcessing || isListening}
                     className={`flex items-center space-x-2 px-6 py-3 rounded-full font-medium transition-all duration-300 ${
-                      isInListeningSession
-                        ? 'bg-red-600 text-white shadow-lg'
-                        : isProcessing
+                      !hasSpeechRecognition
                         ? 'bg-gray-600 text-gray-300 cursor-not-allowed'
+                        : isListening
+                        ? 'bg-red-600 text-white shadow-lg animate-pulse'
+                        : isProcessing
+                        ? 'bg-yellow-600 text-white shadow-lg'
                         : 'bg-green-600 text-white hover:bg-green-700'
                     }`}
                   >
-                    {isInListeningSession ? (
+                    {isListening ? (
                       <>
-                        <Clock size={20} />
-                        <span>Listening {listeningTimer}s</span>
+                        <MicOff size={20} />
+                        <span>Listening...</span>
                       </>
                     ) : isProcessing ? (
                       <>
                         <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white"></div>
-                        <span>Analyzing...</span>
+                        <span>Processing...</span>
                       </>
                     ) : (
                       <>
                         <Mic size={20} />
-                        <span>Ask Questions</span>
+                        <span>Ask Question</span>
                       </>
                     )}
-                  </button>
-                )}
-                
-                {isCameraActive && (
-                  <button
-                    onClick={() => setCameraMode(cameraMode === 'user' ? 'environment' : 'user')}
-                    disabled={isProcessing || isInListeningSession}
-                    className="flex items-center space-x-2 px-4 py-2 bg-gray-700 hover:bg-gray-600 disabled:bg-gray-800 disabled:cursor-not-allowed rounded-full text-sm transition-colors"
-                  >
-                    <span>Switch to {cameraMode === 'user' ? 'Back' : 'Front'} Camera</span>
                   </button>
                 )}
               </div>
@@ -765,130 +887,13 @@ function App() {
               {/* Current Response Display */}
               {assistantResponse && (
                 <div className="bg-blue-900/20 border border-blue-500/30 rounded-xl p-6 mb-8">
-                  <h3 className="font-semibold text-lg text-blue-300 mb-3">Current Response:</h3>
+                  <h3 className="font-semibold text-lg text-blue-300 mb-3">AI Response:</h3>
                   <p className="text-gray-200 text-base leading-relaxed">{assistantResponse}</p>
+                  {currentQuestion && (
+                    <p className="text-gray-400 text-sm mt-3 italic">Question: "{currentQuestion}"</p>
+                  )}
                 </div>
               )}
-
-              {/* Example Commands */}
-              <div className="text-center">
-                <p className="text-gray-400 text-sm mb-3">Example voice commands:</p>
-                <div className="flex flex-wrap justify-center gap-2">
-                  {[
-                    "What do you see?",
-                    "Read any text",
-                    "Describe the scene",
-                    "Are there any people?",
-                    "What colors do you see?",
-                    "Count the objects",
-                    "Is it safe here?",
-                    "What's in front of me?"
-                  ].map((command, index) => (
-                    <span key={index} className="bg-gray-800/50 px-3 py-1 rounded-full text-xs text-gray-300 border border-gray-700">
-                      "{command}"
-                    </span>
-                  ))}
-                </div>
-              </div>
-            </div>
-          </main>
-        )}
-
-        {/* Chat Page - Features */}
-        {currentPage === 'chat' && (
-          <main className="flex-1 px-4 sm:px-6 lg:px-8 pb-32 sm:pb-24 pt-8">
-            <div className="max-w-4xl mx-auto">
-              <h1 className="font-bold text-2xl sm:text-3xl md:text-4xl text-center mb-8">
-                Visual Accessibility Features
-              </h1>
-              
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-6 mb-12">
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <Clock className="w-8 h-8 mb-4 text-blue-400" />
-                  <h3 className="font-semibold text-lg mb-2">20-Second Voice Sessions</h3>
-                  <p className="text-gray-400 text-sm">Ask multiple questions in timed sessions. I'll remember all questions and answer them in sequence.</p>
-                </div>
-                
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <Camera className="w-8 h-8 mb-4 text-blue-400" />
-                  <h3 className="font-semibold text-lg mb-2">Real-Time Scene Analysis</h3>
-                  <p className="text-gray-400 text-sm">AI-powered analysis of live camera feed with detailed descriptions of objects, people, text, and environments.</p>
-                </div>
-                
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <Volume2 className="w-8 h-8 mb-4 text-blue-400" />
-                  <h3 className="font-semibold text-lg mb-2">Full Audio Interface</h3>
-                  <p className="text-gray-400 text-sm">Complete voice interaction - speak your questions and hear detailed audio responses for total accessibility.</p>
-                </div>
-                
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <Mic className="w-8 h-8 mb-4 text-green-400" />
-                  <h3 className="font-semibold text-lg mb-2">Advanced Speech Recognition</h3>
-                  <p className="text-gray-400 text-sm">Continuous listening during sessions with automatic restart and error recovery for reliable voice input.</p>
-                </div>
-                
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <Settings className="w-8 h-8 mb-4 text-purple-400" />
-                  <h3 className="font-semibold text-lg mb-2">Adaptive Responses</h3>
-                  <p className="text-gray-400 text-sm">Context-aware answers that understand different question types like safety, navigation, reading, and identification.</p>
-                </div>
-                
-                <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
-                  <MessageCircle className="w-8 h-8 mb-4 text-yellow-400" />
-                  <h3 className="font-semibold text-lg mb-2">Question Queue System</h3>
-                  <p className="text-gray-400 text-sm">Visual tracking of all questions in a session with real-time progress indicators and completion status.</p>
-                </div>
-              </div>
-
-              <div className="bg-blue-900/20 rounded-xl p-6 border border-blue-500/30 mb-8">
-                <h3 className="font-semibold text-lg text-blue-300 mb-4">Complete Workflow</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8 text-sm">
-                  <div>
-                    <h4 className="font-medium text-white mb-3">Voice Input Process:</h4>
-                    <ol className="space-y-2 text-gray-300 list-decimal list-inside">
-                      <li>Turn on camera for live scene analysis</li>
-                      <li>Press microphone to start 20-second session</li>
-                      <li>Ask multiple questions clearly</li>
-                      <li>System captures and queues all questions</li>
-                      <li>Session ends automatically after 20 seconds</li>
-                    </ol>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-white mb-3">AI Analysis & Output:</h4>
-                    <ol className="space-y-2 text-gray-300 list-decimal list-inside">
-                      <li>Latest camera frame is captured</li>
-                      <li>Each question processed with Gemini Vision API</li>
-                      <li>Detailed visual analysis performed</li>
-                      <li>All answers spoken aloud in sequence</li>
-                      <li>Ready for next session immediately</li>
-                    </ol>
-                  </div>
-                </div>
-              </div>
-
-              <div className="bg-green-900/20 rounded-xl p-6 border border-green-500/30">
-                <h3 className="font-semibold text-lg text-green-300 mb-4">Question Categories</h3>
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-sm">
-                  <div>
-                    <h4 className="font-medium text-white mb-3">Scene Description:</h4>
-                    <ul className="space-y-1 text-gray-300">
-                      <li>• "What do you see?" - Overall scene overview</li>
-                      <li>• "Describe the environment" - Detailed surroundings</li>
-                      <li>• "What's in front of me?" - Forward-facing objects</li>
-                      <li>• "Count the objects" - Quantity identification</li>
-                    </ul>
-                  </div>
-                  <div>
-                    <h4 className="font-medium text-white mb-3">Specific Analysis:</h4>
-                    <ul className="space-y-1 text-gray-300">
-                      <li>• "Read any text" - OCR text recognition</li>
-                      <li>• "Are there people?" - Human detection</li>
-                      <li>• "What colors?" - Color identification</li>
-                      <li>• "Is it safe?" - Safety assessment</li>
-                    </ul>
-                  </div>
-                </div>
-              </div>
             </div>
           </main>
         )}
@@ -923,21 +928,11 @@ function App() {
                   </div>
                   
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
-                    <span className="font-medium">Session Duration</span>
-                    <span className="text-gray-400">20 seconds</span>
-                  </div>
-                  
-                  <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
                     <span className="font-medium">Voice Recognition</span>
                     <span className={`text-sm px-2 py-1 rounded ${
-                      (window.SpeechRecognition || (window as any).webkitSpeechRecognition) 
-                        ? 'bg-green-600/20 text-green-400' 
-                        : 'bg-red-600/20 text-red-400'
+                      hasSpeechRecognition ? 'bg-green-600/20 text-green-400' : 'bg-red-600/20 text-red-400'
                     }`}>
-                      {(window.SpeechRecognition || (window as any).webkitSpeechRecognition) 
-                        ? 'Supported' 
-                        : 'Not Supported'
-                      }
+                      {hasSpeechRecognition ? 'Supported' : 'Not Supported'}
                     </span>
                   </div>
                   
@@ -960,25 +955,20 @@ function App() {
                 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
-                    <span className="font-medium">Default Camera</span>
-                    <select 
-                      value={cameraMode}
-                      onChange={(e) => setCameraMode(e.target.value as CameraMode)}
-                      className="bg-gray-700 text-white px-3 py-1 rounded border border-gray-600"
-                    >
-                      <option value="environment">Rear Camera</option>
-                      <option value="user">Front Camera</option>
-                    </select>
-                  </div>
-                  
-                  <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
-                    <span className="font-medium">Auto-Capture</span>
-                    <span className="text-gray-400">Every 3 seconds</span>
+                    <span className="font-medium">Current Camera</span>
+                    <span className="text-blue-400 font-medium">
+                      {cameraMode === 'user' ? 'Front Camera' : 'Back Camera'}
+                    </span>
                   </div>
                   
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
                     <span className="font-medium">Image Quality</span>
                     <span className="text-gray-400">720p JPEG</span>
+                  </div>
+                  
+                  <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
+                    <span className="font-medium">Capture Method</span>
+                    <span className="text-gray-400">On-Demand</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-3">
@@ -993,7 +983,7 @@ function App() {
               </div>
 
               <div className="bg-purple-900/20 border border-purple-600/30 rounded-xl p-6 mb-8">
-                <h3 className="font-semibold text-lg text-purple-300 mb-4">API Configuration</h3>
+                <h3 className="font-semibold text-lg text-purple-300 mb-4">API Status</h3>
                 <div className="space-y-3">
                   <div className="flex justify-between items-center py-2">
                     <span className="font-medium">Gemini Vision API</span>
@@ -1002,43 +992,55 @@ function App() {
                         ? 'bg-green-600/20 text-green-400' 
                         : 'bg-yellow-600/20 text-yellow-400'
                     }`}>
-                      {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" ? 'Configured' : 'Demo Mode'}
+                      {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" ? 'Active' : 'Demo Mode'}
                     </span>
                   </div>
                   <p className="text-gray-400 text-sm">
                     {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" 
-                      ? 'API key is configured. Real scene analysis is active.'
-                      : 'Using demo responses. Add your Gemini API key for real visual analysis.'
+                      ? 'Real-time visual analysis is active with Gemini AI.'
+                      : 'Using demo responses. Add your Gemini API key for real analysis.'
                     }
                   </p>
                 </div>
               </div>
 
               <div className="bg-green-900/20 border border-green-600/30 rounded-xl p-6 mb-8">
-                <h3 className="font-semibold text-lg text-green-300 mb-4">Test Controls</h3>
+                <h3 className="font-semibold text-lg text-green-300 mb-4">Test System</h3>
                 <div className="space-y-3">
                   <button 
-                    onClick={() => speak("AKSHI Global Visual Assistant is working perfectly. All audio settings are configured correctly. Speech synthesis and voice recognition are both functioning normally.")}
+                    onClick={() => speak("Audio test successful. Speech synthesis is working correctly. The voice assistant is ready to help you understand what you see through your camera.")}
                     className="w-full bg-green-600/20 hover:bg-green-600/30 border border-green-600/50 rounded-xl p-3 transition-all duration-300 flex items-center justify-center space-x-2"
                   >
                     <Volume2 className="w-5 h-5 text-green-400" />
-                    <span className="font-medium text-green-400">Test Audio Output</span>
+                    <span className="font-medium text-green-400">Test Audio</span>
                   </button>
                   
                   <button 
-                    onClick={() => speak("Here's how to use the voice session feature: First, turn on your camera so I can see what you're looking at. Then press the microphone button to start a 20-second listening session. Ask me multiple questions about the scene within those 20 seconds. I will remember all your questions and then analyze the camera image to answer each one in detail. This allows for efficient interaction where you can ask everything you want to know in one session.")}
+                    onClick={() => speak("To use AKSHI: First, click Start Camera to activate your camera. Then point it at what you want to understand. Click Ask Question and speak clearly. I will capture the image and provide detailed audio descriptions of what I see.")}
                     className="w-full bg-blue-600/20 hover:bg-blue-600/30 border border-blue-600/50 rounded-xl p-3 transition-all duration-300 flex items-center justify-center space-x-2"
                   >
-                    <Clock className="w-5 h-5 text-blue-400" />
-                    <span className="font-medium text-blue-400">Voice Session Tutorial</span>
+                    <Mic className="w-5 h-5 text-blue-400" />
+                    <span className="font-medium text-blue-400">Usage Guide</span>
                   </button>
                   
                   <button 
-                    onClick={() => speak("Camera permissions test: Please make sure your browser allows camera access for this website. You can check this in your browser's address bar or settings. If the camera button shows 'Start Camera', click it to begin live scene analysis.")}
+                    onClick={async () => {
+                      if (!navigator.mediaDevices) {
+                        speak('Camera is not available in this browser or device.');
+                        return;
+                      }
+                      try {
+                        const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: false });
+                        stream.getTracks().forEach(track => track.stop());
+                        speak('Camera access test successful. Your camera is working and permissions are granted.');
+                      } catch (error) {
+                        speak('Camera access test failed. Please check your camera permissions and try again.');
+                      }
+                    }}
                     className="w-full bg-purple-600/20 hover:bg-purple-600/30 border border-purple-600/50 rounded-xl p-3 transition-all duration-300 flex items-center justify-center space-x-2"
                   >
                     <Camera className="w-5 h-5 text-purple-400" />
-                    <span className="font-medium text-purple-400">Camera Access Guide</span>
+                    <span className="font-medium text-purple-400">Test Camera Access</span>
                   </button>
                 </div>
               </div>
@@ -1046,30 +1048,28 @@ function App() {
               <div className="bg-gray-800/50 rounded-xl p-6 border border-gray-700/50">
                 <h2 className="font-semibold text-xl mb-6 flex items-center">
                   <Settings className="w-6 h-6 mr-2 text-blue-400" />
-                  App Information
+                  System Information
                 </h2>
                 
                 <div className="space-y-4">
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
                     <span className="font-medium">Version</span>
-                    <span className="text-gray-400">v1.0 Full Implementation</span>
+                    <span className="text-gray-400">v2.0 Simplified</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
-                    <span className="font-medium">AI Integration</span>
-                    <span className={GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" ? "text-green-400" : "text-yellow-400"}>
-                      {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" ? "Gemini Vision API" : "Demo Responses"}
-                    </span>
+                    <span className="font-medium">Processing</span>
+                    <span className="text-green-400">On-Demand Capture</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-3 border-b border-gray-700/50">
-                    <span className="font-medium">Features</span>
-                    <span className="text-green-400">Complete Audio Pipeline</span>
+                    <span className="font-medium">Browser</span>
+                    <span className="text-gray-400">{navigator.userAgent.includes('Chrome') ? 'Chrome' : navigator.userAgent.includes('Firefox') ? 'Firefox' : navigator.userAgent.includes('Safari') ? 'Safari' : 'Other'}</span>
                   </div>
                   
                   <div className="flex justify-between items-center py-3">
                     <span className="font-medium">Status</span>
-                    <span className="text-green-400">Ready for Production</span>
+                    <span className="text-green-400">Ready</span>
                   </div>
                 </div>
               </div>
