@@ -55,7 +55,7 @@ function App() {
 
   // Analyze image with Gemini Vision API
   const analyzeImageWithGemini = async (imageBase64: string, question: string): Promise<string> => {
-    if (GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE") {
+    if (GEMINI_API_KEY === "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78") {
       return getFallbackResponse(question);
     }
 
@@ -551,7 +551,7 @@ Keep your response clear, organized, and under 200 words.`
             </div>
 
             {/* API Configuration Notice */}
-            {GEMINI_API_KEY === "YOUR_GEMINI_API_KEY_HERE" && (
+            {GEMINI_API_KEY === "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78" && (
               <div className="mb-8 max-w-2xl mx-auto bg-yellow-900/20 border border-yellow-600/50 rounded-xl p-4">
                 <p className="text-yellow-300 text-sm text-center">
                   <strong>Demo Mode:</strong> Add your Gemini API key for real scene analysis. Currently showing demo responses.
@@ -988,15 +988,15 @@ Keep your response clear, organized, and under 200 words.`
                   <div className="flex justify-between items-center py-2">
                     <span className="font-medium">Gemini Vision API</span>
                     <span className={`text-sm px-2 py-1 rounded ${
-                      GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE"
+                      GEMINI_API_KEY !== "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78"
                         ? 'bg-green-600/20 text-green-400' 
                         : 'bg-yellow-600/20 text-yellow-400'
                     }`}>
-                      {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" ? 'Active' : 'Demo Mode'}
+                      {GEMINI_API_KEY !== "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78" ? 'Active' : 'Demo Mode'}
                     </span>
                   </div>
                   <p className="text-gray-400 text-sm">
-                    {GEMINI_API_KEY !== "YOUR_GEMINI_API_KEY_HERE" 
+                    {GEMINI_API_KEY !== "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78" 
                       ? 'Real-time visual analysis is active with Gemini AI.'
                       : 'Using demo responses. Add your Gemini API key for real analysis.'
                     }
