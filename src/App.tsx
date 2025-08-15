@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react';
 import { Mic, Camera, Settings, Home, MessageCircle, Volume2, VolumeX, MicOff, Play, Pause } from 'lucide-react';
 
 // Configuration - Replace with your actual API key
-const GEMINI_API_KEY = "YOUR_ACTUAL_API_KEY_HERE";
+const GEMINI_API_KEY = "AIzaSyDokKlMSGtrR6fi51uGeMP-H1R2hYV7k78";
 const GEMINI_API_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
 
 type Page = 'home' | 'chat' | 'settings' | 'camera';
